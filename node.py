@@ -11,6 +11,8 @@ import time
 import uuid
 from typing import Dict, Optional, Set
 import websockets
+from websockets.legacy.server import serve
+from websockets.legacy.client import connect as ws_connect
 import aiohttp
 
 from config import (
@@ -118,11 +120,12 @@ class Node:
         # connect to state server and get initial state
         await self._sync_with_state_server()
 
-        self.websocket_server = await websockets.start_server(
-            self._handle_client,
-            host="localhost",
-            port=self.port
-        )
+        self.websocket_server = await serve(
+      self._handle_client,
+      host="localhost",
+      port=self.port
+  )
+
 
         emit_trace("NODE_STARTED", self.node_id, {
             "port": self.port,
@@ -202,7 +205,7 @@ class Node:
         await self._sync_with_state_server()
 
         # restart WebSocket server
-        self.websocket_server = await websockets.start_server(
+        self.websocket_server = await serve(
             self._handle_client,
             host="localhost",
             port=self.port
@@ -241,19 +244,6 @@ class Node:
 
 
 
-    async def _write_state_to_server(self, updates: dict):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{STATE_SERVER_URL}/state") as resp:
-                    if resp.status == 200:
-                        state = await resp.json()
-                        state.update(updates)
-                        async with session.post(f"{STATE_SERVER_URL}/state", json=state) as write_resp:
-                            return write_resp.status == 200
-        except Exception as e:
-            emit_trace("STATE_WRITE_ERROR", self.node_id, {"error": str(e)})
-        return False
-
     async def _add_question_to_server(self, question: str, submitted_by: int) -> Optional[dict]:
         try:
             async with aiohttp.ClientSession() as session:
@@ -281,16 +271,34 @@ class Node:
             emit_trace("VOTE_ADD_ERROR", self.node_id, {"error": str(e)})
         return False
 
-    async def _update_phase_to_server(self, phase: str):
+    async def _update_phase_to_server(self, phase: str, submission_deadline=None,
+                                      voting_deadline=None):
         try:
             async with aiohttp.ClientSession() as session:
+                payload = {"phase": phase}
+                if submission_deadline is not None:
+                    payload["submission_deadline"] = submission_deadline
+                if voting_deadline is not None:
+                    payload["voting_deadline"] = voting_deadline
                 async with session.post(
-                    f"{STATE_SERVER_URL}/state/phase",
-                    json={"phase": phase}
+                        f"{STATE_SERVER_URL}/state/phase",
+                        json=payload
                 ) as resp:
                     return resp.status == 200
         except Exception as e:
             emit_trace("PHASE_UPDATE_ERROR", self.node_id, {"error": str(e)})
+        return False
+
+    async def _update_coordinator_to_server(self, coordinator_id: int):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                        f"{STATE_SERVER_URL}/state/coordinator",
+                        json={"coordinator_id": coordinator_id}
+                ) as resp:
+                    return resp.status == 200
+        except Exception as e:
+            emit_trace("COORDINATOR_UPDATE_ERROR", self.node_id, {"error": str(e)})
         return False
 
     async def _connect_to_peers(self):
@@ -300,7 +308,7 @@ class Node:
             if port != self.port and port not in self.outgoing_connections:
                 try:
                     conn = await asyncio.wait_for(
-                        websockets.connect(f"ws://localhost:{port}"),
+                        ws_connect(f"ws://localhost:{port}"),
                         timeout=2.0
                     )
                     self.outgoing_connections[port] = conn
@@ -415,7 +423,7 @@ class Node:
         # update state server coordinator if needed
         if self.coordinator_id != coordinator_id:
             self.coordinator_id = coordinator_id
-            await self._write_state_to_server({"coordinator_id": coordinator_id})
+            await self._update_coordinator_to_server(coordinator_id)
 
     async def _heartbeat_monitor(self):
         #monitor for heartbeat timeout and trigger election
@@ -529,12 +537,18 @@ class Node:
 
         # reply OK
         ok_msg = create_message("OK", self.node_id)
-        try:
-            await connection.send(ok_msg.to_json())
-        except Exception:
-            pass
+        sender_port = 8000 + sender_id
+        if sender_port in self.outgoing_connections:
+            try:
+                await self.outgoing_connections[sender_port].send(ok_msg.to_json())
+            except Exception:
+                del self.outgoing_connections[sender_port]
+        else:
+            try:
+                await connection.send(ok_msg.to_json())
+            except Exception:
+                pass
 
-    
 
     async def _handle_ok(self, sender_id: int):
 
@@ -650,7 +664,7 @@ class Node:
             self.coordinator_id = self.node_id
             self.role = "coordinator"
             # Update state server
-            await self._write_state_to_server({"coordinator_id": self.node_id})
+            await self._update_coordinator_to_server(self.node_id)
             # Resume or start session
             await self._resume_session()
         else:
@@ -685,13 +699,13 @@ class Node:
         if new_coordinator_id == self.node_id:
             self.role = "coordinator"
             # update state server
-            await self._write_state_to_server({"coordinator_id": self.node_id})
+            await self._update_coordinator_to_server(self.node_id)
             # resume or start session
             await self._resume_session()
 
         else:
             self.role = "peer"
-            await self._write_state_to_server({"coordinator_id": new_coordinator_id})
+            await self._update_coordinator_to_server(self.coordinator_id)
 
         # if frozen (thought it was coordinator), unfreeze  
         if self.frozen:
@@ -802,10 +816,7 @@ class Node:
         })
 
         # update state server
-        await self._write_state_to_server({
-            "phase": PHASE_SUBMISSION,
-            "submission_deadline": self.submission_deadline
-        })
+        await self._update_phase_to_server(PHASE_SUBMISSION,submission_deadline=self.submission_deadline)
 
 
         # wait for submission deadline
@@ -837,10 +848,7 @@ class Node:
         await self._broadcast(questions_msg)
 
         # update state server
-        await self._write_state_to_server({
-            "phase": PHASE_VOTING,
-            "voting_deadline": self.voting_deadline
-        })
+        await self._update_phase_to_server(PHASE_VOTING, voting_deadline=self.voting_deadline)
 
         emit_trace("PHASE_ADVANCED", self.node_id, {
             "from": PHASE_SUBMISSION,
@@ -1125,8 +1133,7 @@ class Node:
 
 #main entry point for running a node.
 
-def main():
-    
+async def main_async():
     parser = argparse.ArgumentParser(description="Distributed Voting Application Node")
     parser.add_argument("--id", type=int, required=True, help="Unique node ID")
     parser.add_argument("--port", type=int, required=True, help="Port for this node")
@@ -1138,17 +1145,19 @@ def main():
     node = Node(args.id, args.port, peer_ports)
 
     try:
-        asyncio.run(node.start())
-
-    
+        await node.start()
         while node.running:
-            try:
-                asyncio.get_event_loop().run_until_complete(asyncio.sleep(1))
-            except KeyboardInterrupt:
-                break
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        pass
     finally:
-        asyncio.run(node.stop())
+        await node.stop()
+
+
+def main():
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
     main()
+
