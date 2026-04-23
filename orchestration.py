@@ -7,6 +7,8 @@ STATE_SERVER_URL = "http://localhost:6000"
 async def start_state_server():
     process = subprocess.Popen(["python", "state_server.py"])
     await asyncio.sleep(1)
+    async with aiohttp.ClientSession() as session:
+        await session.get(f"{STATE_SERVER_URL}/reset")
     return process
 
 async def start_node(node_id, port, peers):
@@ -19,6 +21,8 @@ async def get_state():
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{STATE_SERVER_URL}/state") as resp:
             return await resp.json()
+
+
 
 async def main():
     process = []
