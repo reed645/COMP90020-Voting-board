@@ -459,7 +459,7 @@ class Node:
         emit_trace("ELECTION_SENT", self.node_id, {"term": self.current_term})
 
         # Identify all higher id
-        higher_node_ids = [nid for nid in self.peer_ports if nid > self.node_id]
+        higher_node_ids = [nid for nid in self.peer_ports if (nid - 8000) > self.node_id]
         self.election_state["higher_nodes_contacted"] = higher_node_ids
 
         if higher_node_ids:
@@ -1125,7 +1125,7 @@ class Node:
 
 #main entry point for running a node.
 
-def main():
+async def main_async():
     
     parser = argparse.ArgumentParser(description="Distributed Voting Application Node")
     parser.add_argument("--id", type=int, required=True, help="Unique node ID")
@@ -1138,16 +1138,17 @@ def main():
     node = Node(args.id, args.port, peer_ports)
 
     try:
-        asyncio.run(node.start())
-
-    
+        await node.start()
         while node.running:
-            try:
-                asyncio.get_event_loop().run_until_complete(asyncio.sleep(1))
-            except KeyboardInterrupt:
-                break
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        pass
     finally:
-        asyncio.run(node.stop())
+        await node.stop()
+
+
+def main():
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
