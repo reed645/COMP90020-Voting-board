@@ -61,6 +61,7 @@ def get_state():
 
 @app.route("/state", methods=["POST"])
 def set_state():
+    global current_state
     #replace current state with request body.
     new_state = request.get_json()
     if new_state is None:
@@ -183,12 +184,12 @@ def update_phase():
 
 @app.route("/state/coordinator", methods=["POST"])
 def update_coordinator():
+    global current_state
     data = request.get_json()
     if data is None:
         return jsonify({"error": "Invalid JSON"}), 400
 
     with state_lock:
-        global current_state
         if current_state is None:
             state = load_state()
         else:
@@ -202,6 +203,7 @@ def update_coordinator():
 
 @app.route("/reset", methods=["POST"])
 def reset_state():
+    global current_state
     #reset state to default (for testing).
     with state_lock:
         global current_state

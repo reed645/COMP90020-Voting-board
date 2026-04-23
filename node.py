@@ -183,6 +183,18 @@ class Node:
         #simulate node crash
         emit_trace("CRASH", self.node_id)
         self.running = False
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+        if self.submission_timer_task:
+            self.submission_timer_task.cancel()
+        if self.voting_timer_task:
+            self.voting_timer_task.cancel()
+        if self.vote_broadcast_task:
+            self.vote_broadcast_task.cancel()
+        if self.frozen_timer:
+            self.frozen_timer.cancel()
+        if self.election_state["timer"]:
+            self.election_state["timer"].cancel()
 
         # force close all connections
         for conn in self.outgoing_connections.values():
@@ -203,6 +215,9 @@ class Node:
 
         # re-sync with state server
         await self._sync_with_state_server()
+
+        # check if recovering into an ongoing session
+        await self.check_and_handle_late_join()
 
         # restart WebSocket server
         self.websocket_server = await serve(
@@ -271,11 +286,13 @@ class Node:
             emit_trace("VOTE_ADD_ERROR", self.node_id, {"error": str(e)})
         return False
 
-    async def _update_phase_to_server(self, phase: str, submission_deadline=None,
-                                      voting_deadline=None):
+    async def _update_phase_to_server(self, phase: str = None, submission_deadline: float =
+    None, voting_deadline: float = None):
         try:
             async with aiohttp.ClientSession() as session:
-                payload = {"phase": phase}
+                payload = {}
+                if phase is not None:
+                    payload["phase"] = phase
                 if submission_deadline is not None:
                     payload["submission_deadline"] = submission_deadline
                 if voting_deadline is not None:
@@ -331,7 +348,7 @@ class Node:
                 try:
                     tasks.append(self.outgoing_connections[port].send(msg_json))
                 except Exception:
-                    pass
+                    del self.outgoing_connections[port]
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -423,7 +440,6 @@ class Node:
         # update state server coordinator if needed
         if self.coordinator_id != coordinator_id:
             self.coordinator_id = coordinator_id
-            await self._update_coordinator_to_server(coordinator_id)
 
     async def _heartbeat_monitor(self):
         #monitor for heartbeat timeout and trigger election
@@ -464,10 +480,13 @@ class Node:
         self.election_state["ok_received"] = []
         self.election_state["higher_nodes_contacted"] = []
 
+        if self.role == "coordinator":
+            self.frozen = True
+
         emit_trace("ELECTION_SENT", self.node_id, {"term": self.current_term})
 
         # Identify all higher id
-        higher_node_ids = [nid for nid in self.peer_ports if nid > self.node_id]
+        higher_node_ids = [nid for nid in self.peer_ports if (nid - 8000) > self.node_id]
         self.election_state["higher_nodes_contacted"] = higher_node_ids
 
         if higher_node_ids:
@@ -705,7 +724,7 @@ class Node:
 
         else:
             self.role = "peer"
-            await self._update_coordinator_to_server(self.coordinator_id)
+            await self._update_coordinator_to_server(new_coordinator_id)
 
         # if frozen (thought it was coordinator), unfreeze  
         if self.frozen:
@@ -816,7 +835,10 @@ class Node:
         })
 
         # update state server
-        await self._update_phase_to_server(PHASE_SUBMISSION,submission_deadline=self.submission_deadline)
+        await self._update_phase_to_server(
+            phase=PHASE_SUBMISSION,
+            submission_deadline=self.submission_deadline
+        )
 
 
         # wait for submission deadline
@@ -848,7 +870,10 @@ class Node:
         await self._broadcast(questions_msg)
 
         # update state server
-        await self._update_phase_to_server(PHASE_VOTING, voting_deadline=self.voting_deadline)
+        await self._update_phase_to_server(
+            phase=PHASE_VOTING,
+            voting_deadline=self.voting_deadline
+        )
 
         emit_trace("PHASE_ADVANCED", self.node_id, {
             "from": PHASE_SUBMISSION,
@@ -984,12 +1009,13 @@ class Node:
             return False
 
         # send SUBMIT message to coordinator
-        submit_msg = create_message(
-            "SUBMIT",
-            self.node_id,
-            {"question": question}
-        )
-        await self._broadcast(submit_msg)
+        if self.role == "coordinator":
+            result = await self._add_question_to_server(question, self.node_id)
+            if result:
+                await self._sync_with_state_server()
+        else:
+            submit_msg = create_message("SUBMIT", self.node_id, {"question": question})
+            await self._broadcast(submit_msg)
         self.has_submitted = True
 
         emit_trace("SUBMIT_SENT", self.node_id, {"question": question[:50]})
@@ -1134,6 +1160,7 @@ class Node:
 #main entry point for running a node.
 
 async def main_async():
+    
     parser = argparse.ArgumentParser(description="Distributed Voting Application Node")
     parser.add_argument("--id", type=int, required=True, help="Unique node ID")
     parser.add_argument("--port", type=int, required=True, help="Port for this node")
