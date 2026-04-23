@@ -182,6 +182,26 @@ def update_phase():
     return jsonify({"status": "ok", "phase": state["phase"]})
 
 
+@app.route("/state/coordinator", methods=["POST"])
+def update_coordinator():
+    global current_state
+    data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    with state_lock:
+        if current_state is None:
+            state = load_state()
+        else:
+            state = current_state
+
+        state["coordinator_id"] = data.get("coordinator_id")
+        current_state = state
+        save_state(state)
+
+    return jsonify({"status": "ok"})
+
+
 @app.route("/reset", methods=["POST"])
 def reset_state():
     global current_state

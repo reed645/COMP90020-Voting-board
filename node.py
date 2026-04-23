@@ -241,19 +241,6 @@ class Node:
 
 
 
-    async def _write_state_to_server(self, updates: dict):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{STATE_SERVER_URL}/state") as resp:
-                    if resp.status == 200:
-                        state = await resp.json()
-                        state.update(updates)
-                        async with session.post(f"{STATE_SERVER_URL}/state", json=state) as write_resp:
-                            return write_resp.status == 200
-        except Exception as e:
-            emit_trace("STATE_WRITE_ERROR", self.node_id, {"error": str(e)})
-        return False
-
     async def _add_question_to_server(self, question: str, submitted_by: int) -> Optional[dict]:
         try:
             async with aiohttp.ClientSession() as session:
@@ -281,16 +268,36 @@ class Node:
             emit_trace("VOTE_ADD_ERROR", self.node_id, {"error": str(e)})
         return False
 
-    async def _update_phase_to_server(self, phase: str):
+    async def _update_phase_to_server(self, phase: str = None, submission_deadline: float =
+    None, voting_deadline: float = None):
         try:
             async with aiohttp.ClientSession() as session:
+                payload = {}
+                if phase is not None:
+                    payload["phase"] = phase
+                if submission_deadline is not None:
+                    payload["submission_deadline"] = submission_deadline
+                if voting_deadline is not None:
+                    payload["voting_deadline"] = voting_deadline
                 async with session.post(
-                    f"{STATE_SERVER_URL}/state/phase",
-                    json={"phase": phase}
+                        f"{STATE_SERVER_URL}/state/phase",
+                        json=payload
                 ) as resp:
                     return resp.status == 200
         except Exception as e:
             emit_trace("PHASE_UPDATE_ERROR", self.node_id, {"error": str(e)})
+        return False
+
+    async def _update_coordinator_to_server(self, coordinator_id: int):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                        f"{STATE_SERVER_URL}/state/coordinator",
+                        json={"coordinator_id": coordinator_id}
+                ) as resp:
+                    return resp.status == 200
+        except Exception as e:
+            emit_trace("COORDINATOR_UPDATE_ERROR", self.node_id, {"error": str(e)})
         return False
 
     async def _connect_to_peers(self):
@@ -415,7 +422,6 @@ class Node:
         # update state server coordinator if needed
         if self.coordinator_id != coordinator_id:
             self.coordinator_id = coordinator_id
-            await self._write_state_to_server({"coordinator_id": coordinator_id})
 
     async def _heartbeat_monitor(self):
         #monitor for heartbeat timeout and trigger election
@@ -455,6 +461,9 @@ class Node:
         self.election_state["in_progress"] = True
         self.election_state["ok_received"] = []
         self.election_state["higher_nodes_contacted"] = []
+
+        if self.role == "coordinator":
+            self.frozen = True
 
         emit_trace("ELECTION_SENT", self.node_id, {"term": self.current_term})
 
@@ -650,7 +659,7 @@ class Node:
             self.coordinator_id = self.node_id
             self.role = "coordinator"
             # Update state server
-            await self._write_state_to_server({"coordinator_id": self.node_id})
+            await self._update_coordinator_to_server(self.node_id)
             # Resume or start session
             await self._resume_session()
         else:
@@ -685,13 +694,13 @@ class Node:
         if new_coordinator_id == self.node_id:
             self.role = "coordinator"
             # update state server
-            await self._write_state_to_server({"coordinator_id": self.node_id})
+            await self._update_coordinator_to_server(self.node_id)
             # resume or start session
             await self._resume_session()
 
         else:
             self.role = "peer"
-            await self._write_state_to_server({"coordinator_id": new_coordinator_id})
+            await self._update_coordinator_to_server(new_coordinator_id)
 
         # if frozen (thought it was coordinator), unfreeze  
         if self.frozen:
@@ -802,10 +811,10 @@ class Node:
         })
 
         # update state server
-        await self._write_state_to_server({
-            "phase": PHASE_SUBMISSION,
-            "submission_deadline": self.submission_deadline
-        })
+        await self._update_phase_to_server(
+            phase=PHASE_SUBMISSION,
+            submission_deadline=self.submission_deadline
+        )
 
 
         # wait for submission deadline
@@ -837,10 +846,10 @@ class Node:
         await self._broadcast(questions_msg)
 
         # update state server
-        await self._write_state_to_server({
-            "phase": PHASE_VOTING,
-            "voting_deadline": self.voting_deadline
-        })
+        await self._update_phase_to_server(
+            phase=PHASE_VOTING,
+            voting_deadline=self.voting_deadline
+        )
 
         emit_trace("PHASE_ADVANCED", self.node_id, {
             "from": PHASE_SUBMISSION,
