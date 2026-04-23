@@ -330,7 +330,7 @@ class Node:
                 try:
                     tasks.append(self.outgoing_connections[port].send(msg_json))
                 except Exception:
-                    pass
+                    del self.outgoing_connections[port]
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -538,12 +538,18 @@ class Node:
 
         # reply OK
         ok_msg = create_message("OK", self.node_id)
-        try:
-            await connection.send(ok_msg.to_json())
-        except Exception:
-            pass
+        sender_port = 8000 + sender_id
+        if sender_port in self.outgoing_connections:
+            try:
+                await self.outgoing_connections[sender_port].send(ok_msg.to_json())
+            except Exception:
+                del self.outgoing_connections[sender_port]
+        else:
+            try:
+                await connection.send(ok_msg.to_json())
+            except Exception:
+                pass
 
-    
 
     async def _handle_ok(self, sender_id: int):
 
