@@ -194,7 +194,6 @@ def update_coordinator():
             state = load_state()
         else:
             state = current_state
-
         state["coordinator_id"] = data.get("coordinator_id")
         current_state = state
         save_state(state)
@@ -207,6 +206,7 @@ def reset_state():
     global current_state
     #reset state to default (for testing).
     with state_lock:
+        global current_state
         current_state = get_default_state()
         save_state(current_state)
     return jsonify({"status": "ok"})

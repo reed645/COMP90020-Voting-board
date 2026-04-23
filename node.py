@@ -11,6 +11,8 @@ import time
 import uuid
 from typing import Dict, Optional, Set
 import websockets
+from websockets.legacy.server import serve
+from websockets.legacy.client import connect as ws_connect
 import aiohttp
 
 from config import (
@@ -118,11 +120,12 @@ class Node:
         # connect to state server and get initial state
         await self._sync_with_state_server()
 
-        self.websocket_server = await websockets.start_server(
-            self._handle_client,
-            host="localhost",
-            port=self.port
-        )
+        self.websocket_server = await serve(
+      self._handle_client,
+      host="localhost",
+      port=self.port
+  )
+
 
         emit_trace("NODE_STARTED", self.node_id, {
             "port": self.port,
@@ -217,7 +220,7 @@ class Node:
         await self.check_and_handle_late_join()
 
         # restart WebSocket server
-        self.websocket_server = await websockets.start_server(
+        self.websocket_server = await serve(
             self._handle_client,
             host="localhost",
             port=self.port
@@ -322,7 +325,7 @@ class Node:
             if port != self.port and port not in self.outgoing_connections:
                 try:
                     conn = await asyncio.wait_for(
-                        websockets.connect(f"ws://localhost:{port}"),
+                        ws_connect(f"ws://localhost:{port}"),
                         timeout=2.0
                     )
                     self.outgoing_connections[port] = conn
@@ -1184,3 +1187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
