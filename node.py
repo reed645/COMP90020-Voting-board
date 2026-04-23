@@ -180,6 +180,18 @@ class Node:
         #simulate node crash
         emit_trace("CRASH", self.node_id)
         self.running = False
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+        if self.submission_timer_task:
+            self.submission_timer_task.cancel()
+        if self.voting_timer_task:
+            self.voting_timer_task.cancel()
+        if self.vote_broadcast_task:
+            self.vote_broadcast_task.cancel()
+        if self.frozen_timer:
+            self.frozen_timer.cancel()
+        if self.election_state["timer"]:
+            self.election_state["timer"].cancel()
 
         # force close all connections
         for conn in self.outgoing_connections.values():
@@ -200,6 +212,9 @@ class Node:
 
         # re-sync with state server
         await self._sync_with_state_server()
+
+        # check if recovering into an ongoing session
+        await self.check_and_handle_late_join()
 
         # restart WebSocket server
         self.websocket_server = await websockets.start_server(
@@ -991,12 +1006,13 @@ class Node:
             return False
 
         # send SUBMIT message to coordinator
-        submit_msg = create_message(
-            "SUBMIT",
-            self.node_id,
-            {"question": question}
-        )
-        await self._broadcast(submit_msg)
+        if self.role == "coordinator":
+            result = await self._add_question_to_server(question, self.node_id)
+            if result:
+                await self._sync_with_state_server()
+        else:
+            submit_msg = create_message("SUBMIT", self.node_id, {"question": question})
+            await self._broadcast(submit_msg)
         self.has_submitted = True
 
         emit_trace("SUBMIT_SENT", self.node_id, {"question": question[:50]})
