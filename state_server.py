@@ -61,6 +61,7 @@ def get_state():
 
 @app.route("/state", methods=["POST"])
 def set_state():
+    global current_state
     #replace current state with request body.
     new_state = request.get_json()
     if new_state is None:
@@ -87,6 +88,7 @@ def add_vote():
         return jsonify({"error": "Missing question_id or sender_id"}), 400
 
     with state_lock:
+        global current_state
         if current_state is None:
             state = load_state()
         else:
@@ -120,6 +122,7 @@ def add_question():
         return jsonify({"error": "Missing question or submitted_by"}), 400
 
     with state_lock:
+        global current_state
         if current_state is None:
             state = load_state()
         else:
@@ -160,6 +163,7 @@ def update_phase():
         return jsonify({"error": "Invalid JSON"}), 400
 
     with state_lock:
+        global current_state
         if current_state is None:
             state = load_state()
         else:
@@ -180,6 +184,7 @@ def update_phase():
 
 @app.route("/reset", methods=["POST"])
 def reset_state():
+    global current_state
     #reset state to default (for testing).
     with state_lock:
         current_state = get_default_state()
