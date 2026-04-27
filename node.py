@@ -33,13 +33,10 @@ from messages import Message, create_message
 
 
 def emit_trace(event: str, node_id: int, detail: dict = None):
-    #print the trace event for debugging
-    print(json.dumps({
-        "time": time.time(),
-        "node_id": node_id,
-        "event": event,
-        "detail": detail or {}
-    }))
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    detail_str = "  " + ", ".join(f"{k}={v}" for k, v in (detail or {}).items())
+    print(f"[{ts}] Node {node_id} | {event:<35} |{detail_str}")
 
 
 class Node:
