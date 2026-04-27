@@ -14,6 +14,8 @@ import websockets
 from websockets.legacy.server import serve
 from websockets.legacy.client import connect as ws_connect
 import aiohttp
+import os
+import random
 
 from config import (
     HEARTBEAT_INTERVAL,
@@ -31,13 +33,10 @@ from messages import Message, create_message
 
 
 def emit_trace(event: str, node_id: int, detail: dict = None):
-    #print the trace event for debugging
-    print(json.dumps({
-        "time": time.time(),
-        "node_id": node_id,
-        "event": event,
-        "detail": detail or {}
-    }))
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    detail_str = "  " + ", ".join(f"{k}={v}" for k, v in (detail or {}).items())
+    print(f"[{ts}] Node {node_id} | {event:<35} |{detail_str}")
 
 
 class Node:
@@ -554,6 +553,12 @@ class Node:
 
         emit_trace("ELECTION_RECEIVED", self.node_id, {"from": sender_id})
 
+        # FAULT EXPERIMENT: drop ok message randomly based on environment
+        drop_rate = float(os.environ.get("DROP_RATE", "0"))
+        if random.random() < drop_rate:
+            emit_trace("OK message dropped",self.node_id, {"to": sender_id, "drop_rate": drop_rate})
+            return
+
         # reply OK
         ok_msg = create_message("OK", self.node_id)
         sender_port = 8000 + sender_id
@@ -676,13 +681,29 @@ class Node:
             {"coordinator_id": winner_id}
 
         )
+
+        # Check for possible split-brain
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{STATE_SERVER_URL}/state") as resp:
+                    if resp.status == 200:
+                        current = await resp.json()
+                        existing = current.get("coordinator_id")
+                        if existing is not None and existing != self.node_id:
+                            emit_trace("SPLIT_BRAIN_DETECTED", self.node_id, {
+                                "self_claims": self.node_id,
+                                "server_has": existing
+                            })
+        except Exception:
+            pass
         await self._broadcast(coordinator_msg)
 
         # if it is the winner, become coordinator
         if winner_id == self.node_id:
             self.coordinator_id = self.node_id
             self.role = "coordinator"
-            # Update state server
+
+                # Update state server
             await self._update_coordinator_to_server(self.node_id)
             # Resume or start session
             await self._resume_session()
@@ -700,6 +721,12 @@ class Node:
 
         #the sender of this message is the node that initiated/broadcast the election
         #the coordinator_id in payload is the winner (may be different from sender).
+
+        drop_rate = float(os.environ.get("DROP_RATE", "0"))
+        if random.random() < drop_rate:
+            emit_trace("COORDINATOR message dropped", self.node_id, {"from": message.sender_id,
+                                                                     "drop_rate": drop_rate})
+            return
 
         payload = message.payload
         new_coordinator_id = payload.get("coordinator_id")
@@ -726,7 +753,7 @@ class Node:
             self.role = "peer"
             await self._update_coordinator_to_server(new_coordinator_id)
 
-        # if frozen (thought it was coordinator), unfreeze  
+        # if frozen (thought it was coordinator), unfreeze
         if self.frozen:
             self.frozen = False
             emit_trace("UNFROZEN", self.node_id)
