@@ -111,6 +111,9 @@ class Node:
         # unique identifier for this node instance (in case the node crush)
         self.instance_id = str(uuid.uuid4())[:8]
 
+        # wait for old coordinator to step down before taking over
+        self._step_down_ack_event = asyncio.Event()
+
 
     async def start(self):
         self.loop = asyncio.get_event_loop()
@@ -142,9 +145,8 @@ class Node:
         # Start election monitor
         asyncio.create_task(self._election_monitor())
 
-        # Check if we should become coordinator immediately (no coordinator exists)
-        if self.coordinator_id is None:
-            asyncio.create_task(self._start_election())
+        #  query for coordinator on startup, triggers election if no coordinator exists
+        asyncio.create_task(self._query_for_coordinator())
 
     async def stop(self):
         #stop the node gracefully
@@ -317,6 +319,21 @@ class Node:
             emit_trace("COORDINATOR_UPDATE_ERROR", self.node_id, {"error": str(e)})
         return False
 
+    async def _read_from_outgoing(self, conn, port):
+        try:
+            async for msg_json in conn:
+                try:
+                    message = Message.from_json(msg_json)
+                    await self._handle_message(message, conn)
+                except Exception:
+                    pass
+
+        except websockets.ConnectionClosedOK:
+            pass
+        finally:
+            if port in self.outgoing_connections:
+                del self.outgoing_connections[port]
+
     async def _connect_to_peers(self):
         # establish outgoing WebSocket connections to all known peers
         for port in self.peer_ports:
@@ -328,6 +345,7 @@ class Node:
                         timeout=2.0
                     )
                     self.outgoing_connections[port] = conn
+                    asyncio.create_task(self._read_from_outgoing(conn, port))
                     emit_trace("PEER_CONNECTED", self.node_id, {"port": port})
                 except Exception as e:
                     emit_trace("PEER_CONNECT_FAILED", self.node_id, {
@@ -419,6 +437,8 @@ class Node:
             await self._handle_session_update(payload)
         elif msg_type == "SESSION_RESUME":
             await self._handle_session_resume(payload)
+        elif msg_type == "STEP_DOWN_ACK":
+            await self._handle_step_down_ack(message.sender_id)
         elif msg_type == "TRACE":
         
             print(json.dumps({
@@ -427,6 +447,7 @@ class Node:
                 "event": payload.get("event"),
                 "detail": payload.get("detail", {})
             }))
+
 
     async def _handle_heartbeat(self, payload: dict):
         #handle heartbeat from coordinator
@@ -527,8 +548,6 @@ class Node:
         # guard against double-call: can be triggered by both _handle_ok and _start_election
         if not self.election_state["in_progress"]:
             return
-
-        self.election_state["in_progress"] = False
 
         ok_received = self.election_state["ok_received"]
 
@@ -662,12 +681,16 @@ class Node:
             })
             await self._start_election()
 
+    async def _handle_step_down_ack(self, sender_id: int):
+        emit_trace("STEP_DOWN_RECIEVED", self.node_id, {"from": sender_id})
+        self._step_down_ack_event.set()
+
     async def _announce_coordinator(self, winner_id: int):
         #broadcasts COORDINATOR message on behalf of the winner (which may be self).
         #if the winner is self, also starts the coordinator session
 
 
-        self.election_state["in_progress"] = False
+        self.election_state["in_progress"] = True
 
         emit_trace("COORDINATOR_ELECTED", self.node_id, {
             "term": self.current_term,
@@ -700,10 +723,23 @@ class Node:
 
         # if it is the winner, become coordinator
         if winner_id == self.node_id:
+            self._step_down_ack_event.clear()
+
+            # wait for old coordinator to step down
+            try:
+                await asyncio.wait_for(self._step_down_ack_event.wait(),
+                                       timeout=ELECTION_TIMEOUT)
+                emit_trace("STEP_DOWN_CONFIRMED", self.node_id)
+            except asyncio.TimeoutError:
+                # old coordinator likely crashed, proceed anyway
+                emit_trace("STEP_DOWN_TIMEOUT", self.node_id)
+            finally:
+                self.election_state["in_progress"] = False
+
             self.coordinator_id = self.node_id
             self.role = "coordinator"
 
-                # Update state server
+            # Update state server
             await self._update_coordinator_to_server(self.node_id)
             # Resume or start session
             await self._resume_session()
@@ -712,8 +748,8 @@ class Node:
             self.coordinator_id = winner_id
             emit_trace("COORDINATOR_ACCEPTED", self.node_id, {
                 "coordinator_id": winner_id
-
             })
+            self.election_state["in_progress"] = False
 
 
     async def _handle_coordinator(self, message: Message, connection: websockets.WebSocketClientProtocol = None):
@@ -750,8 +786,26 @@ class Node:
             await self._resume_session()
 
         else:
+            was_coordinator = (self.role == "coordinator")
             self.role = "peer"
             await self._update_coordinator_to_server(new_coordinator_id)
+            self.election_state["in_progress"] = False
+
+            if was_coordinator:
+                ack_msg = create_message("STEP_DOWN_ACK", self.node_id)
+                sender_port = 8000 + sender_id
+                if sender_port in self.outgoing_connections:
+                    try:
+                        await self.outgoing_connections[sender_port].send(ack_msg.to_json())
+                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to":sender_id})
+                    except Exception:
+                        pass
+                elif connection:
+                    try:
+                        await connection.send(ack_msg.to_json())
+                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to":sender_id})
+                    except Exception:
+                        pass
 
         # if frozen (thought it was coordinator), unfreeze
         if self.frozen:

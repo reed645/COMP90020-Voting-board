@@ -174,6 +174,11 @@ class TraceMessage(Message):
             payload={"event": event, "detail": detail or {}}
         )
 
+@dataclass
+class StepDownAck(Message):
+    def __init__(self, sender_id: int):
+        super().__init__(type = "STEP_DOWN_ACK", sender_id = sender_id, payload = {})
+
 
 #create message according to the message type
 def create_message(msg_type: str, sender_id: int, payload: dict = None) -> Message:
@@ -194,6 +199,7 @@ def create_message(msg_type: str, sender_id: int, payload: dict = None) -> Messa
         "SESSION_UPDATE": SessionUpdate,
         "SESSION_RESUME": SessionResume,
         "TRACE": TraceMessage,
+        "STEP_DOWN_ACK": StepDownAck
     }
 
 
