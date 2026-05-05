@@ -11,7 +11,6 @@ import time
 import uuid
 from typing import Dict, Optional, Set
 import websockets
-from aiohttp import web
 from websockets.legacy.server import serve
 from websockets.legacy.client import connect as ws_connect
 import aiohttp
@@ -42,14 +41,17 @@ def emit_trace(event: str, node_id: int, detail: dict = None):
 
 class Node:
 
-    def __init__(self, node_id: int, port: int, peers: dict, host: str = "0.0.0.0"):
+    def __init__(self, node_id: int, port: int, peer_ports: list):
+        
+        # NOTE: our implementation assumes port number encodes the node ID,
+        # e.g., node_id=3 uses port=8003, node_id=5 uses port=8005.
+        # The peer_ports contains list of port numbers
+        #  (port == node_id convention)
 
         self.node_id = node_id
         self.port = port
-        self.host = host
-
-        # {node_id: (host, port)} mapping for all peers
-        self.peers = peers
+        
+        self.peer_ports = peer_ports
 
         # Role state
         self.role = "peer" 
@@ -100,9 +102,7 @@ class Node:
 
     
         self.websocket_server: Optional[websockets.WebSocketServer] = None
-        self.web_runner = None
-        self.web_server_task = None
-        self.outgoing_connections: Dict[int, websockets.WebSocketClientProtocol] = {}  # node_id -> connection
+        self.outgoing_connections: Dict[int, websockets.WebSocketClientProtocol] = {}  # port -> connection
 
         
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -124,15 +124,14 @@ class Node:
 
         self.websocket_server = await serve(
       self._handle_client,
-      host=self.host,
+      host="localhost",
       port=self.port
   )
 
 
         emit_trace("NODE_STARTED", self.node_id, {
             "port": self.port,
-            "host": self.host,
-            "peers": list(self.peers.keys()),
+            "peer_ports": self.peer_ports,
             "coordinator_id": self.coordinator_id,
             "phase": self.session_phase
         })
@@ -224,7 +223,7 @@ class Node:
         # restart WebSocket server
         self.websocket_server = await serve(
             self._handle_client,
-            host=self.host,
+            host="localhost",
             port=self.port
         )
 
@@ -320,7 +319,7 @@ class Node:
             emit_trace("COORDINATOR_UPDATE_ERROR", self.node_id, {"error": str(e)})
         return False
 
-    async def _read_from_outgoing(self, conn, peer_id):
+    async def _read_from_outgoing(self, conn, port):
         try:
             async for msg_json in conn:
                 try:
@@ -332,44 +331,50 @@ class Node:
         except websockets.ConnectionClosedOK:
             pass
         finally:
-            if peer_id in self.outgoing_connections:
-                del self.outgoing_connections[peer_id]
+            if port in self.outgoing_connections:
+                del self.outgoing_connections[port]
 
     async def _connect_to_peers(self):
-        for peer_id, (peer_host, peer_port) in self.peers.items():
-            if peer_id != self.node_id and peer_id not in self.outgoing_connections:
+        # establish outgoing WebSocket connections to all known peers
+        for port in self.peer_ports:
+            #check if the port is not the same as the current node and not already connected
+            if port != self.port and port not in self.outgoing_connections:
                 try:
                     conn = await asyncio.wait_for(
-                        ws_connect(f"ws://{peer_host}:{peer_port}"),
+                        ws_connect(f"ws://localhost:{port}"),
                         timeout=2.0
                     )
-                    self.outgoing_connections[peer_id] = conn
-                    asyncio.create_task(self._read_from_outgoing(conn, peer_id))
-                    emit_trace("PEER_CONNECTED", self.node_id, {"peer_id": peer_id})
+                    self.outgoing_connections[port] = conn
+                    asyncio.create_task(self._read_from_outgoing(conn, port))
+                    emit_trace("PEER_CONNECTED", self.node_id, {"port": port})
                 except Exception as e:
                     emit_trace("PEER_CONNECT_FAILED", self.node_id, {
-                        "peer_id": peer_id,
+                        "port": port,
                         "error": str(e)
                     })
 
-    async def _broadcast(self, message: Message, exclude_id: int = None):
-        await self._broadcast_to_nodes(message, list(self.outgoing_connections.keys()), exclude_id)
+    async def _broadcast(self, message: Message, exclude_port: int = None):
+        await self._broadcast_to_ports(message, list(self.outgoing_connections.keys()), exclude_port)
 
-    async def _broadcast_to_nodes(self, message: Message, node_ids: list, exclude_id: int = None):
+    async def _broadcast_to_ports(self, message: Message, ports: list, exclude_port: int = None):
         msg_json = message.to_json()
         tasks = []
 
-        for nid in node_ids:
-            if nid != exclude_id and nid in self.outgoing_connections:
+        for port in ports:
+            if port != exclude_port and port in self.outgoing_connections:
                 try:
-                    tasks.append(self.outgoing_connections[nid].send(msg_json))
+                    tasks.append(self.outgoing_connections[port].send(msg_json))
                 except Exception:
-                    del self.outgoing_connections[nid]
+                    del self.outgoing_connections[port]
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _handle_client(self, websocket: websockets.WebSocketClientProtocol, path: str):
+        #handle WebSocket connections from peers
+        #to see if new peer connects
+        client_port = websocket.remote_address[1] if websocket.remote_address else None
+
         try:
             async for msg_json in websocket:
                 try:
@@ -382,10 +387,16 @@ class Node:
                         "error": str(e),
                         "message": msg_json[:100]
                     })
+            #ignore if the peer disconnects normally
         except websockets.ConnectionClosed:
             pass
         except Exception as e:
             emit_trace("CLIENT_HANDLER_ERROR", self.node_id, {"error": str(e)})
+        finally:
+            # remove from known nodes if connection closed
+            if client_port and client_port in self.outgoing_connections:
+                del self.outgoing_connections[client_port]
+                emit_trace("PEER_DISCONNECTED", self.node_id, {"port": client_port})
 
     async def _handle_message(self, message: Message, connection: websockets.WebSocketClientProtocol = None):
         #route incoming messages to appropriate handlers
@@ -494,12 +505,14 @@ class Node:
 
         emit_trace("ELECTION_SENT", self.node_id, {"term": self.current_term})
 
-        higher_node_ids = [nid for nid in self.peers if nid > self.node_id]
+        # Identify all higher id
+        higher_node_ids = [nid for nid in self.peer_ports if (nid - 8000) > self.node_id]
         self.election_state["higher_nodes_contacted"] = higher_node_ids
 
         if higher_node_ids:
+            # send ELECTION to all higher ID 
             election_msg = create_message("ELECTION", self.node_id)
-            await self._broadcast_to_nodes(election_msg, higher_node_ids)
+            await self._broadcast_to_ports(election_msg, higher_node_ids)
 
             # wait for OK replies until all contacted OR timeout
             try:
@@ -565,12 +578,14 @@ class Node:
             emit_trace("OK message dropped",self.node_id, {"to": sender_id, "drop_rate": drop_rate})
             return
 
+        # reply OK
         ok_msg = create_message("OK", self.node_id)
-        if sender_id in self.outgoing_connections:
+        sender_port = 8000 + sender_id
+        if sender_port in self.outgoing_connections:
             try:
-                await self.outgoing_connections[sender_id].send(ok_msg.to_json())
+                await self.outgoing_connections[sender_port].send(ok_msg.to_json())
             except Exception:
-                del self.outgoing_connections[sender_id]
+                del self.outgoing_connections[sender_port]
         else:
             try:
                 await connection.send(ok_msg.to_json())
@@ -669,51 +684,6 @@ class Node:
     async def _handle_step_down_ack(self, sender_id: int):
         emit_trace("STEP_DOWN_RECIEVED", self.node_id, {"from": sender_id})
         self._step_down_ack_event.set()
-
-    async  def _start_web_server(self):
-        from aiohttp import web
-        app = web.Application()
-        app.router.add_get("/", self._handle_web_index)
-        app.router.add_post("/submit", self._handle_web_submit)
-        app.router.add_post("/vote", self._handle_web_vote)
-        app.router.add_get("/questions", self._handle_web_questions)
-        app.router.add_get("/results", self._handle_web_results)
-
-        self.web_runner = web.AppRunner(app)
-        await self.web_runner.setup()
-        site = web.TCPSite(self.web_runner, "0.0.0.0", 9000 + self.node_id)
-        await site.start()
-        emit_trace("WEB_SERVER_STARTED", self.node_id, {"port": 9000 + self.node_id})
-
-    async def _stop_web_server(self):
-        if self.web_runner is not None:
-            self.web_runner.cleanup()
-            self.web_runner = None
-            emit_trace("WEB_SERVER_STOPPED", self.node_id, {"port": 9000 + self.node_id})
-
-    async def _handle_web_question(self, request):
-        from aiohttp import web
-        return web.json_response({"question": self.questions})
-
-    async def _handle_web_results(self, request):
-        from aiohttp import web
-        rankings = sorted(
-            self.questions,
-            key=lambda q: q["votes"],
-            reverse=True
-        )
-        return web.json_response({"rankings": rankings})
-
-    async def _handle_web_vote(self, request):
-        from aiohttp import web
-        data = await request.json()
-        question_id = data.get("question_id", [])
-        if not question_id:
-            return web.json_response({"error": "no question selected"}, status=400)
-
-        vote_msg = create_message("VOTE", self.node_id, {"question_id": question_id})
-        await self._handle_vote(vote_msg)
-        return web.json_response({"status": "ok"})
 
     async def _announce_coordinator(self, winner_id: int):
         #broadcasts COORDINATOR message on behalf of the winner (which may be self).
@@ -823,16 +793,17 @@ class Node:
 
             if was_coordinator:
                 ack_msg = create_message("STEP_DOWN_ACK", self.node_id)
-                if sender_id in self.outgoing_connections:
+                sender_port = 8000 + sender_id
+                if sender_port in self.outgoing_connections:
                     try:
-                        await self.outgoing_connections[sender_id].send(ack_msg.to_json())
-                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to": sender_id})
+                        await self.outgoing_connections[sender_port].send(ack_msg.to_json())
+                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to":sender_id})
                     except Exception:
                         pass
                 elif connection:
                     try:
                         await connection.send(ack_msg.to_json())
-                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to": sender_id})
+                        emit_trace("STEP_DOWN_ACK_SENT", self.node_id, {"to":sender_id})
                     except Exception:
                         pass
 
@@ -1269,37 +1240,17 @@ class Node:
 
 #main entry point for running a node.
 
-def parse_peers(peers_str: str) -> dict:
-    """Parse peers string. Supports two formats:
-    - Cross-machine: '1@host1:8001,2@host2:8002'
-    - Localhost:      '8001,8002,8003' (node_id = port - 8000)
-    """
-    peers = {}
-    for entry in peers_str.split(","):
-        entry = entry.strip()
-        if "@" in entry:
-            id_part, addr_part = entry.split("@", 1)
-            host, port = addr_part.rsplit(":", 1)
-            peers[int(id_part)] = (host, int(port))
-        else:
-            port = int(entry)
-            peers[port - 8000] = ("localhost", port)
-    return peers
-
-
 async def main_async():
-
+    
     parser = argparse.ArgumentParser(description="Distributed Voting Application Node")
     parser.add_argument("--id", type=int, required=True, help="Unique node ID")
     parser.add_argument("--port", type=int, required=True, help="Port for this node")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    parser.add_argument("--peers", type=str, required=True,
-                        help="Peers: '1@host:port,...' or 'port,...' for localhost")
+    parser.add_argument("--peers", type=str, required=True, help="Comma-separated list of peer ports")
 
     args = parser.parse_args()
-    peers = parse_peers(args.peers)
+    peer_ports = [int(p.strip()) for p in args.peers.split(",")]
 
-    node = Node(args.id, args.port, peers, args.host)
+    node = Node(args.id, args.port, peer_ports)
 
     try:
         await node.start()
