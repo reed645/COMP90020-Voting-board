@@ -1,7 +1,8 @@
 """
-    This is all the configuration for the node and state server. 
+    This is all the configuration for the node and state server.
     Including Heartbeat setting for the election, state server address, and session durations.
 """
+import os
 
 # Heartbeat settings
 HEARTBEAT_INTERVAL = 1.0  
@@ -12,9 +13,9 @@ QUERY_TIMEOUT = 2.0  # wait time for ANSWER replies
 # State server address 
 STATE_SERVER_URL = "http://localhost:6000"
 
-# Session durations
-SUBMISSION_DURATION = 60  
-VOTING_DURATION = 30 
+# Session durations (overridable via env vars for demo)
+SUBMISSION_DURATION = int(os.environ.get("SUBMISSION_DURATION", "60"))
+VOTING_DURATION = int(os.environ.get("VOTING_DURATION", "30"))
 
 # Phase
 PHASE_WAITING = "waiting"

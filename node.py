@@ -124,6 +124,8 @@ class Node:
 
         # Web UI state
         self._ws_clients: Set = set()
+        self._peer_connect_failures: Set = set()
+        self._session_task: asyncio.Task = None
 
 
     async def start(self):
@@ -265,6 +267,9 @@ class Node:
                         self.submission_deadline = state.get("submission_deadline")
                         self.voting_deadline = state.get("voting_deadline")
 
+                        if any(q.get("submitted_by") == self.node_id for q in self.questions):
+                            self.has_submitted = True
+
                         emit_trace("STATE_SYNCED", self.node_id, {
                             "phase": self.session_phase,
                             "coordinator_id": self.coordinator_id
@@ -359,13 +364,16 @@ class Node:
                         timeout=2.0
                     )
                     self.outgoing_connections[port] = conn
+                    self._peer_connect_failures.discard(port)
                     asyncio.create_task(self._read_from_outgoing(conn, port))
                     emit_trace("PEER_CONNECTED", self.node_id, {"port": port})
                 except Exception as e:
-                    emit_trace("PEER_CONNECT_FAILED", self.node_id, {
-                        "port": port,
-                        "error": str(e)
-                    })
+                    if port not in self._peer_connect_failures:
+                        self._peer_connect_failures.add(port)
+                        emit_trace("PEER_CONNECT_FAILED", self.node_id, {
+                            "port": port,
+                            "error": str(e)
+                        })
 
     async def _broadcast(self, message: Message, exclude_port: int = None):
         await self._broadcast_to_ports(message, list(self.outgoing_connections.keys()), exclude_port)
@@ -476,6 +484,8 @@ class Node:
 
         self.last_heartbeat = time.time()
         self.session_phase = phase
+        self.submission_deadline = payload.get("submission_deadline")
+        self.voting_deadline = payload.get("voting_deadline")
 
         # update state server coordinator if needed
         if self.coordinator_id != coordinator_id:
@@ -495,7 +505,12 @@ class Node:
                 msg = create_message(
                     "HEARTBEAT",
                     self.node_id,
-                    {"coordinator_id": self.node_id, "phase": self.session_phase}
+                    {
+                        "coordinator_id": self.node_id,
+                        "phase": self.session_phase,
+                        "submission_deadline": self.submission_deadline,
+                        "voting_deadline": self.voting_deadline,
+                    }
                 )
                 await self._broadcast(msg)
                 continue
@@ -699,7 +714,7 @@ class Node:
                 "reason": "we_have_higher_id"
 
             })
-            await self._start_election()
+            asyncio.create_task(self._start_election())
 
     async def _handle_step_down_ack(self, sender_id: int):
         emit_trace("STEP_DOWN_RECIEVED", self.node_id, {"from": sender_id})
@@ -725,20 +740,6 @@ class Node:
 
         )
 
-        # Check for possible split-brain
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{STATE_SERVER_URL}/state") as resp:
-                    if resp.status == 200:
-                        current = await resp.json()
-                        existing = current.get("coordinator_id")
-                        if existing is not None and existing != self.node_id:
-                            emit_trace("SPLIT_BRAIN_DETECTED", self.node_id, {
-                                "self_claims": self.node_id,
-                                "server_has": existing
-                            })
-        except Exception:
-            pass
         await self._broadcast(coordinator_msg)
 
         # if it is the winner, become coordinator
@@ -812,6 +813,10 @@ class Node:
             self.election_state["in_progress"] = False
 
             if was_coordinator:
+                if self._session_task and not self._session_task.done():
+                    self._session_task.cancel()
+                    self._session_task = None
+
                 ack_msg = create_message("STEP_DOWN_ACK", self.node_id)
                 sender_port = 8000 + sender_id
                 if sender_port in self.outgoing_connections:
@@ -860,7 +865,7 @@ class Node:
         if self.session_phase == PHASE_SUBMISSION and self.submission_deadline:
             remaining = self.submission_deadline - current_time
             if remaining > 0:
-                asyncio.create_task(self._run_submission_phase(remaining))
+                self._session_task = asyncio.create_task(self._run_submission_phase(remaining))
             else:
                 # submission phase should have ended, advance to voting
                 await self._advance_to_voting()
@@ -870,7 +875,7 @@ class Node:
         elif self.session_phase == PHASE_VOTING and self.voting_deadline:
             remaining = self.voting_deadline - current_time
             if remaining > 0:
-                asyncio.create_task(self._run_voting_phase(remaining))
+                self._session_task = asyncio.create_task(self._run_voting_phase(remaining))
             else:
                 # voting phase should have ended, close session
                 await self._close_session()
@@ -900,7 +905,6 @@ class Node:
     async def _handle_session_update(self, payload: dict):
         phase = payload.get("phase")
         self.session_phase = phase
-        await self._sync_with_state_server()
         emit_trace("SESSION_UPDATE", self.node_id, {"phase": phase})
 
     async def _election_monitor(self):
@@ -979,7 +983,7 @@ class Node:
         await self._broadcast(update_msg)
 
         # start voting phase
-        asyncio.create_task(self._run_voting_phase(VOTING_DURATION))
+        self._session_task = asyncio.create_task(self._run_voting_phase(VOTING_DURATION))
 
     async def _run_voting_phase(self, duration: float):
         #run the voting phase 
@@ -1244,7 +1248,7 @@ class Node:
         if self.session_phase != PHASE_WAITING:
             return
         emit_trace("SESSION_STARTED", self.node_id)
-        asyncio.create_task(self._run_submission_phase(SUBMISSION_DURATION))
+        self._session_task = asyncio.create_task(self._run_submission_phase(SUBMISSION_DURATION))
         update_msg = create_message("SESSION_UPDATE", self.node_id, {"phase": PHASE_SUBMISSION})
         await self._broadcast(update_msg)
 

@@ -34,14 +34,28 @@ body {
 
 
 #role-badge {
-  background: #e3f2fd;
-  color: #1565c0;
   padding: 3px 10px;
   border-radius: 6px;
   font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
+}
+
+#role-badge.role-coordinator {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+#role-badge.role-peer {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+#coordinator-info {
+  font-size: 0.8rem;
+  color: #555;
+  margin-top: 4px;
 }
 
 #node-id {
@@ -51,9 +65,18 @@ body {
 }
 
 #status {
-  font-size: 0.85rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.status-live {
   color: #4caf50;
 }
+
+.status-disconnected {
+  color: #e53935;
+}
+
 
 #main-panel {
   display: flex;
