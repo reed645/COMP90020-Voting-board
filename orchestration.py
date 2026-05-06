@@ -132,7 +132,7 @@ async def main():
 #  Use case 1: Coordinator crashes during voting phase.
 async def crash_voting():
 
-    processes, coord = await setup_cluster(sub_duration=30, vote_duration=10)
+    processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
 
     await wait_for_phase("submission")
     await wait_for_phase("voting")
@@ -166,12 +166,6 @@ async def crash_voting():
 
 #  Use case 2: one peer node crash right after it voted.
 async def crash_after_voting():
-    print("\n" + "=" * 60)
-    print("SCENARIO: crash-after-voting")
-    print("  A peer votes then immediately crashes.")
-    print("  Verifies the vote was delivered to coordinator before crash.")
-    print("=" * 60)
-
     processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
     peer_to_crash = [i for i in range(1, 5) if i != coord][0]
 
@@ -204,13 +198,8 @@ async def crash_after_voting():
 
 #  Use case 3: one peer node crash during submit phase.
 async def crash_peer():
-    print("\n" + "=" * 60)
-    print("SCENARIO: crash-peer")
-    print("  Non-coordinator node crashes during submission phase.")
-    print("  System continues without interruption.")
-    print("=" * 60)
 
-    processes, coord = await setup_cluster(sub_duration=60, vote_duration=60)
+    processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
     peer_to_crash = [i for i in range(1, 5) if i != coord][0]
 
     print("\n  Start the session from the UI, then submit your questions.")
@@ -245,13 +234,7 @@ async def crash_peer():
 
 #  Use case 4: coordinator crashs during submission phase
 async def crash_submission():
-    print("\n" + "=" * 60)
-    print("SCENARIO: crash-submission")
-    print("  Coordinator crashes during submission phase.")
-    print("  New coordinator recovers questions from state server.")
-    print("=" * 60)
-
-    processes, coord = await setup_cluster(sub_duration=60, vote_duration=60)
+    processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
 
     print("\n  Start the session from the UI, then submit your questions.")
     await wait_for_phase("submission")
