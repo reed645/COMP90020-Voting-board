@@ -6,7 +6,7 @@ import aiohttp
 STATE_SERVER_URL = "http://localhost:6000"
 
 async def start_state_server():
-    process = subprocess.Popen(["python", "state_server.py"])
+    process = subprocess.Popen(["python3", "state_server.py"])
     await asyncio.sleep(1)
     async with aiohttp.ClientSession() as session:
         await session.post(f"{STATE_SERVER_URL}/reset")
@@ -18,7 +18,7 @@ async def start_node(node_id, port, peers, drop_rate=0.0):
     env = os.environ.copy()
     env["DROP_RATE"] = str(drop_rate)
     process = subprocess.Popen(
-        ["python", "node.py", "--id", str(node_id), "--port", str(port), "--peers", peer_str],
+        ["python3", "node.py", "--id", str(node_id), "--port", str(port), "--peers", peer_str],
         env=env
     )
     return process
@@ -28,8 +28,8 @@ async def get_state():
         async with session.get(f"{STATE_SERVER_URL}/state") as resp:
             return await resp.json()
 
-async def crush_node(node_id, process):
-    print("Crushing node...")
+async def crash_node(node_id, process):
+    print(f"Crashing node {node_id}...")
     process[node_id].terminate()
     del process[node_id]
 
@@ -49,29 +49,25 @@ async def main():
     await asyncio.sleep(0.3)
     process[4] = await start_node(4, 8004, [8001, 8002, 8003])
 
-    # First election when system start
-    print("Waiting for election to finish...")
-    await asyncio.sleep(5)
+    print("\n=== All nodes started ===")
+    print("UI:  http://localhost:9001 ~ 9004")
+    print("Waiting for election...")
+    await asyncio.sleep(6)
     state = await get_state()
-    print(f"coodinator: {state['coordinator_id']}")
+    print(f"Coordinator: Node {state['coordinator_id']}")
+    print("\nPress Ctrl+C to shut down all nodes.\n")
 
-    # Crush the highest id node
-    await crush_node(4, process)
-    print("Waiting for re-election...")
-    await asyncio.sleep(8)
-    state = await get_state()
-    print(f"New coordinator after crush: {state['coordinator_id']}")
-
-    # Recover the highest id node
-    await recover_node(4, 8004, [8001, 8002, 8003], process)
-    await asyncio.sleep(4)
-    state = await get_state()
-    print(f"New coordinator after recover: {state['coordinator_id']}")
-
-    # Shut down all processes
-    print("Shutting down...")
-    for p in process.values():
-        p.terminate()
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        print("\nShutting down all processes...")
+        for p in process.values():
+            p.terminate()
+        for p in process.values():
+            p.wait()
 
 # FAULT EXPERIMENT : weaken synchronize system:
 async def fault_experiment():

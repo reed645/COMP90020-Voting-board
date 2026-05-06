@@ -32,7 +32,7 @@ def get_default_state() -> dict:
     #return default empty state.
     return {
         "coordinator_id": None,
-        "phase": "submission",
+        "phase": "waiting",
         "questions": [],
         "votes": {},
         "submission_deadline": None,

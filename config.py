@@ -16,7 +16,8 @@ STATE_SERVER_URL = "http://localhost:6000"
 SUBMISSION_DURATION = 60  
 VOTING_DURATION = 30 
 
-# Phase 
+# Phase
+PHASE_WAITING = "waiting"
 PHASE_SUBMISSION = "submission"
 PHASE_VOTING = "voting"
 PHASE_CLOSED = "closed"
