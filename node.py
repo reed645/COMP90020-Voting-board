@@ -1253,6 +1253,8 @@ class Node:
         await self._broadcast(update_msg)
 
     async def _reset_session(self):
+        if self.role != "coordinator":
+            return
         self.session_phase = PHASE_WAITING
         self.has_submitted = False
         self.has_voted = False
