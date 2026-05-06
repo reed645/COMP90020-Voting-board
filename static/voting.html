@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voting Dashboard</title>
+<link rel="stylesheet" href="/static/votingstyle.css">
+<script src="/static/voting.js" defer></script>
+</head>
+<body>
+    <div id="layout">
+    <div id="node-card">
+      <span id="role-badge" class="role-peer">peer</span>
+      <div id="node-id">?</div>
+      <div id="coordinator-info">Leader: —</div>
+      <div id="status" class="status-live">live</div>
+    </div>
+    <div id="main-panel">
+      <div id="phase-info">
+        <div id="phase-name">PHASE : IDLE</div>
+        <div id="phase-title">Ready</div>
+        <div id="timer">00:00</div>
+      </div>
+
+    <div id="content">
+        <div id="phase-waiting">
+        <button id="start-btn" onclick="startSession()">Start Submit Questions</button>
+        <p>Waiting for session to begin...</p>
+    </div>
+
+    <div id="phase-submission"class="hidden">
+    <textarea id="question-input" placeholder="Type your question here"></textarea>
+    <button id="submit-btn" onclick="submitQuestion()">Submit</button>
+    <div id="submit-success" class="hidden">Question submitted successfully!</div>
+</div>
+
+    <div id="phase-voting" class="hidden">
+    <div id="vote-list"></div>
+    <div id="voted-msg" class="hidden">Your vote has been submitted!</div>
+</div>
+    </div>
+
+    <div id="phase-closed" class="hidden">
+    <div id="results-list"></div>
+    </div>
+    </div>
+    </div>
+  </div>
+</body>
+</html>

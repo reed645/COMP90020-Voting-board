@@ -81,11 +81,17 @@ class CoordinatorMessage(Message):
 
 @dataclass
 class HeartbeatMessage(Message):
-    def __init__(self, sender_id: int, coordinator_id: int, phase: str):
+    def __init__(self, sender_id: int, coordinator_id: int, phase: str,
+                 submission_deadline=None, voting_deadline=None):
         super().__init__(
             type="HEARTBEAT",
             sender_id=sender_id,
-            payload={"coordinator_id": coordinator_id, "phase": phase}
+            payload={
+                "coordinator_id": coordinator_id,
+                "phase": phase,
+                "submission_deadline": submission_deadline,
+                "voting_deadline": voting_deadline,
+            }
         )
 
 
@@ -207,7 +213,9 @@ def create_message(msg_type: str, sender_id: int, payload: dict = None) -> Messa
         return HeartbeatMessage(
             sender_id,
             payload.get("coordinator_id"),
-            payload.get("phase", "unknown")
+            payload.get("phase", "unknown"),
+            submission_deadline=payload.get("submission_deadline"),
+            voting_deadline=payload.get("voting_deadline"),
         )
 
     elif msg_type == "SUBMIT":

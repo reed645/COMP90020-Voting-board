@@ -5,6 +5,7 @@ in memory and persists to state.json using atomic writes.
 """
 
 import json
+import logging
 import os
 import threading
 from datetime import datetime
@@ -32,7 +33,7 @@ def get_default_state() -> dict:
     #return default empty state.
     return {
         "coordinator_id": None,
-        "phase": "submission",
+        "phase": "waiting",
         "questions": [],
         "votes": {},
         "submission_deadline": None,
@@ -127,6 +128,15 @@ def add_question():
             state = load_state()
         else:
             state = current_state
+
+        # Check if this node already submitted a question
+        for q in state["questions"]:
+            if q["submitted_by"] == submitted_by:
+                return jsonify({
+                    "status": "duplicate",
+                    "question": q,
+                    "message": "Node already submitted a question"
+                })
 
         # Check if question already exists (deduplication by content)
         for q in state["questions"]:
@@ -225,6 +235,9 @@ def run_server(host: str = "0.0.0.0", port: int = 6000):
     with state_lock:
         current_state = load_state()
 
+    # Suppress Flask/Werkzeug HTTP request logs
+    log = logging.getLogger("werkzeug")
+    log.setLevel(logging.ERROR)
     app.run(host=host, port=port, threaded=True)
 
 
