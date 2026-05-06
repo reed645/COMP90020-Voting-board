@@ -10,7 +10,7 @@
 <body>
     <div id="layout">
     <div id="node-card">
-      <span id="role-badge">peer</span>
+      <span id="role-badge" class="role-peer">peer</span>
       <div id="node-id">?</div>
       <div id="coordinator-info">Leader: —</div>
       <div id="status" class="status-live">live</div>
@@ -28,7 +28,7 @@
         <p>Waiting for session to begin...</p>
     </div>
 
-    <div id="phase-submission" class="hidden">
+    <div id="phase-submission"class="hidden">
     <textarea id="question-input" placeholder="Type your question here"></textarea>
     <button id="submit-btn" onclick="submitQuestion()">Submit</button>
     <div id="submit-success" class="hidden">Question submitted successfully!</div>

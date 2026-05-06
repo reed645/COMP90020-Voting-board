@@ -10,8 +10,8 @@
 
 body {
   font-family: -apple-system, 'Segoe UI', sans-serif;
-  background: #fffdf2;
-  color: #000000;
+  background: #fffce9;
+  color: #0a3069;
   min-height: 100vh;
   padding: 24px;
 }
@@ -26,7 +26,7 @@ body {
 
 #node-card {
   background: #ffffff;
-  border: 2px solid #181e25;
+  border: 2px solid #040404;
   border-radius: 5px;
   padding: 24px;
   height: fit-content;
@@ -36,7 +36,7 @@ body {
 #role-badge {
   padding: 3px 10px;
   border-radius: 6px;
-  font-size: 0.7rem;
+  font-size: 1.2rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -49,19 +49,20 @@ body {
 
 #role-badge.role-peer {
   background: #e3f2fd;
-  color: #1565c0;
+  color: #0f3460;
 }
 
 #coordinator-info {
   font-size: 0.8rem;
-  color: #555;
+  color: #4c5768;
   margin-top: 4px;
+  margin-bottom: 10px;
 }
 
 #node-id {
   font-size: 5rem;
   font-weight: 900;
-  margin: 8px 0;
+  margin: 8px ;
 }
 
 #status {
@@ -86,7 +87,7 @@ body {
 
 #phase-info {
   background: #ffffff;
-  border: 2px solid #0f3460;
+  border: 2px solid #040404;
   border-radius: 5px;
   padding: 24px;
 }
@@ -108,12 +109,12 @@ body {
   font-family: 'Courier New', monospace;
   font-size: 2rem;
   font-weight: 900;
-  color: #5b9bd5;
+  color: #ff8d02;
 }
 
 #content {
   background: #ffffff;
-  border: 2px solid #0f3460;
+  border: 2px solid #040404;
   border-radius: 5px;
   padding: 24px;
 }
@@ -121,7 +122,7 @@ body {
 #start-btn {
   width: 100%;
   padding: 22px;
-  background: #5b9bd5;
+  background: #e2703cd9;
   color: #fff;
   border: none;
   border-radius: 5px;
@@ -132,7 +133,7 @@ body {
 }
 
 #start-btn:hover {
-  background: #4a89c4;
+  background: #e75511d9;
 }
 
 #question-input {
@@ -141,8 +142,8 @@ body {
   padding: 12px;
   border: 2px solid #0f3460;
   border-radius: 5px;
-  background: #1a1a2e;
-  color: #fff;
+  background: #fffdf2;
+  color: #000000;
   font-family: inherit;
   font-size: 0.9rem;
   resize: vertical;
@@ -150,7 +151,7 @@ body {
 
 #submit-btn {
   padding: 10px 20px;
-  background: #5b9bd5;
+  background: #e2703cd9;
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -160,5 +161,9 @@ body {
 }
 
 #submit-btn:hover {
-  background: #4a89c4;
+  background: #e75511d9;
+}
+
+#vote-list div:hover {
+  background: #d0d0d0;
 }

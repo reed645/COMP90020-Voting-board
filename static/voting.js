@@ -202,7 +202,7 @@ function updateResults(rankings) {
     div.style.padding = '12px';
     div.style.marginBottom = '8px';
     div.style.borderRadius = '5px';
-    div.style.background = '#acc2dd';
+    div.style.background = '#ecdccc';
     list.appendChild(div);
   }
 }
