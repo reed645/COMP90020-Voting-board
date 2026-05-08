@@ -38,11 +38,48 @@ from messages import Message, create_message
 _node_instances: Dict[int, "Node"] = {}
 
 
+IMPORTANT_EVENTS = {
+    "ELECTION_SENT", "OK_RECEIVED", "COORDINATOR_ELECTED", "COORDINATOR_ACCEPTED",
+    "HEARTBEAT_TIMEOUT", "CRASH", "CRASH_AFTER_VOTE",
+    "RECOVERY_STARTED", "STEP_DOWN_ACK_SENT", "STEP_DOWN_CONFIRMED", "STEP_DOWN_TIMEOUT",
+    "SUBMIT_SENT", "SUBMIT_RECEIVED", "VOTE_SENT", "VOTE_RECEIVED",
+    "SESSION_STARTED", "SESSION_CLOSED", "SESSION_RESUMED",
+    "PHASE_ADVANCED", "NODE_STARTED", "NODE_STOPPED",
+    "QUERY_SENT", "ANSWER_SENT", "ANSWER_RECEIVED",
+    "COORDINATOR_BROADCAST",
+    "ROLE_COORDINATOR",
+}
+
+_SHORT_DETAIL = {
+    "ELECTION_SENT":        lambda d: f"term={d.get('term','')}",
+    "OK_RECEIVED":          lambda d: f"from=N{d.get('from','')}",
+    "COORDINATOR_ELECTED":  lambda d: f"winner=N{d.get('winner_id','')}",
+    "COORDINATOR_ACCEPTED": lambda d: f"coord=N{d.get('coordinator_id','')}",
+    "COORDINATOR_BROADCAST":lambda d: f"coord=N{d.get('coordinator_id','')}, sender=N{d.get('sender','')}",
+    "HEARTBEAT_TIMEOUT":    lambda d: f"{d.get('time_since',''):.1f}s",
+    "SUBMIT_SENT":          lambda d: f"\"{d.get('question','')[:30]}\"",
+    "SUBMIT_RECEIVED":      lambda d: f"from=N{d.get('from','')}, \"{d.get('question','')[:30]}\"",
+    "VOTE_SENT":            lambda d: f"{d.get('question_ids',[])}",
+    "VOTE_RECEIVED":        lambda d: f"from=N{d.get('from','')}, {d.get('question_ids',[])}",
+    "ANSWER_SENT":          lambda d: f"to=N{d.get('to','')}",
+    "ANSWER_RECEIVED":      lambda d: f"coord=N{d.get('coordinator_id','')}, {d.get('action','')}",
+    "STEP_DOWN_ACK_SENT":   lambda d: f"to=N{d.get('to','')}",
+    "SESSION_RESUMED":      lambda d: f"phase={d.get('phase','')}, q={d.get('questions_count','')}",
+    "PHASE_ADVANCED":       lambda d: f"{d.get('from','')} → {d.get('to','')}, q={d.get('questions_count','')}",
+    "NODE_STARTED":         lambda d: f"port={d.get('port','')}",
+}
+
+
 def emit_trace(event: str, node_id: int, detail: dict = None):
     from datetime import datetime
-    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    detail_str = "  " + ", ".join(f"{k}={v}" for k, v in (detail or {}).items())
-    print(f"[{ts}] Node {node_id} | {event:<35} |{detail_str}")
+    ts = datetime.now().strftime("%H:%M:%S")
+    detail = detail or {}
+
+    if event in IMPORTANT_EVENTS:
+        fmt = _SHORT_DETAIL.get(event)
+        detail_str = f" {fmt(detail)}" if fmt else ""
+        print(f"[{ts}] N{node_id} {event}{detail_str}")
+
     node = _node_instances.get(node_id)
     if node:
         node._push_log(ts, event, detail)
@@ -583,6 +620,7 @@ class Node:
         # guard against double-call: can be triggered by both _handle_ok and _start_election
         if not self.election_state["in_progress"]:
             return
+        self.election_state["in_progress"] = False
 
         ok_received = self.election_state["ok_received"]
 
@@ -724,9 +762,6 @@ class Node:
         #broadcasts COORDINATOR message on behalf of the winner (which may be self).
         #if the winner is self, also starts the coordinator session
 
-
-        self.election_state["in_progress"] = True
-
         emit_trace("COORDINATOR_ELECTED", self.node_id, {
             "term": self.current_term,
             "winner_id": winner_id
@@ -759,6 +794,7 @@ class Node:
 
             self.coordinator_id = self.node_id
             self.role = "coordinator"
+            emit_trace("ROLE_COORDINATOR", self.node_id)
 
             # Update state server
             await self._update_coordinator_to_server(self.node_id)
@@ -801,6 +837,7 @@ class Node:
         # if it is the winner, become coordinator
         if new_coordinator_id == self.node_id:
             self.role = "coordinator"
+            emit_trace("ROLE_COORDINATOR", self.node_id)
             # update state server
             await self._update_coordinator_to_server(self.node_id)
             # resume or start session
@@ -1147,6 +1184,11 @@ class Node:
         self.has_voted = True
 
         emit_trace("VOTE_SENT", self.node_id, {"question_ids": valid_ids})
+
+        if os.environ.get("CRASH_AFTER_VOTE") == "1":
+            emit_trace("CRASH_AFTER_VOTE", self.node_id)
+            os._exit(1)
+
         return True
 
 
