@@ -15,7 +15,8 @@ async def start_state_server():
     return process
 
 
-async def start_node(node_id, port, peers, drop_rate=0.0, sub_duration=None, vote_duration=None):
+async def start_node(node_id, port, peers, drop_rate=0.0, sub_duration=None, vote_duration=None,
+                     crash_after_vote=False):
     peer_str = ",".join(str(p) for p in peers)
     env = os.environ.copy()
     env["DROP_RATE"] = str(drop_rate)
@@ -23,6 +24,8 @@ async def start_node(node_id, port, peers, drop_rate=0.0, sub_duration=None, vot
         env["SUBMISSION_DURATION"] = str(sub_duration)
     if vote_duration is not None:
         env["VOTING_DURATION"] = str(vote_duration)
+    if crash_after_vote:
+        env["CRASH_AFTER_VOTE"] = "1"
     process = subprocess.Popen(
         ["python3", "node.py", "--id", str(node_id), "--port", str(port), "--peers", peer_str],
         env=env
@@ -48,27 +51,6 @@ async def recover_node(node_id, port, peers, processes, sub_duration=None, vote_
     processes[node_id] = await start_node(node_id, port, peers,
                                           sub_duration=sub_duration,
                                           vote_duration=vote_duration)
-
-
-async def start_session_api(node_id):
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"http://localhost:{9000 + node_id}/start")
-
-
-async def submit_question_api(node_id, question):
-    async with aiohttp.ClientSession() as session:
-        await session.post(
-            f"http://localhost:{9000 + node_id}/submit",
-            json={"question": question}
-        )
-
-
-async def vote_api(node_id, question_id):
-    async with aiohttp.ClientSession() as session:
-        await session.post(
-            f"http://localhost:{9000 + node_id}/vote",
-            json={"question_ids": [question_id]}
-        )
 
 
 async def wait_for_phase(target_phase, timeout=120):
@@ -115,10 +97,6 @@ def shutdown_all(processes):
 async def main():
     processes, coord = await setup_cluster()
 
-    print(f"\n=== All nodes started ===")
-    print(f"UI:  http://localhost:9001 ~ 9004")
-    print("Press Ctrl+C to shut down all nodes.\n")
-
     try:
         while True:
             await asyncio.sleep(1)
@@ -138,7 +116,7 @@ async def crash_voting():
     await wait_for_phase("voting")
 
     # manually crash the coordinator in terminal
-    input(f"\n Press Enter to crash coordinator (Node {coord})...")
+    input(f"\n press Enter to crash coordinator...")
     await crash_node(coord, processes)
 
     print(" waiting for re-election...")
@@ -146,7 +124,6 @@ async def crash_voting():
     state = await get_state()
     new_coord = state["coordinator_id"]
     print(f" New coordinator: Node {new_coord}")
-    print(f" Votes preserved: {state.get('votes', {})}")
 
     # recover the node after crashed for 2 seconds
     print(f"\n auto-recovering crashed node...")
@@ -160,39 +137,52 @@ async def crash_voting():
     print(f"  coordinator is still: Node {state['coordinator_id']}")
     print(f"  node {coord} recovered and reclaimed coordinator role")
 
-    input("\n  Press Enter to shut down...")
+    input("\n  press Enter to shut down...")
     shutdown_all(processes)
 
 
 #  Use case 2: one peer node crash right after it voted.
 async def crash_after_voting():
-    processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
-    peer_to_crash = [i for i in range(1, 5) if i != coord][0]
+    processes = {}
+    processes["state"] = await start_state_server()
+
+    # only crash node 1 after it voted.
+    coord = 4
+    peer_to_crash = 1
+    for i in range(1, 5):
+        peers = [8000 + j for j in range(1, 5) if j != i]
+        processes[i] = await start_node(
+            i, 8000 + i, peers,
+            sub_duration=30, vote_duration=20,
+            crash_after_vote=(i == peer_to_crash)
+        )
+        await asyncio.sleep(0.3)
+
+    print("  waiting for election...")
+    await asyncio.sleep(6)
+    state = await get_state()
+    coord = state["coordinator_id"]
+    print(f"  Coordinator: Node {coord}")
 
     await wait_for_phase("submission")
     await wait_for_phase("voting")
 
-    # crash node 1 after it voted.
-    while True:
-        state = await get_state()
-        votes = state.get("votes", {})
-        has_vote = any(peer_to_crash in voters for voters in votes.values())
-        if has_vote:
-            break
-        await asyncio.sleep(0.1)
-    await crash_node(peer_to_crash, processes)
+    # wait for the process to exit
+    processes[peer_to_crash].wait()
+    print(f"  node 1 crashed after voting.")
+    del processes[peer_to_crash]
 
-    print(f"\n auto-recovering crashed node...")
+    print(f"\n  auto-recovering crashed node in 2 seconds...")
     await asyncio.sleep(2)
     peers = [8000 + j for j in range(1, 5) if j != peer_to_crash]
     await recover_node(peer_to_crash, 8000 + peer_to_crash, peers, processes,
-                       sub_duration=60, vote_duration=60)
+                       sub_duration=30, vote_duration=20)
 
     print(f"  crashed node rejoins as peer...")
     await asyncio.sleep(5)
     state = await get_state()
 
-    input("\n  Press Enter to shut down...")
+    input("\n  press Enter to shut down...")
     shutdown_all(processes)
 
 
@@ -202,31 +192,24 @@ async def crash_peer():
     processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
     peer_to_crash = [i for i in range(1, 5) if i != coord][0]
 
-    print("\n  Start the session from the UI, then submit your questions.")
     await wait_for_phase("submission")
-    print("  Submission phase started! Submit questions in the UI.")
 
-    input(f"\n  Press Enter to crash peer (Node {peer_to_crash}) during submission...")
+    input(f"\n  press Enter to crash peer (Node {peer_to_crash}) during submission...")
     await crash_node(peer_to_crash, processes)
 
-    print("  System continues normally (no re-election for peer crash).")
-
-    print(f"\n  Auto-recovering Node {peer_to_crash} in 2 seconds...")
+    print(f"\n  auto-recovering crashed node in 2 seconds...")
     await asyncio.sleep(2)
     peers = [8000 + j for j in range(1, 5) if j != peer_to_crash]
     await recover_node(peer_to_crash, 8000 + peer_to_crash, peers, processes,
                        sub_duration=60, vote_duration=60)
 
-    print(f"  Node {peer_to_crash} sends QUERY, receives ANSWER, joins as peer...")
+    print(f"  node sends QUERY, receives ANSWER, joins as peer...")
     await asyncio.sleep(5)
     state = await get_state()
-    print(f"  Coordinator is still: Node {state['coordinator_id']}")
     print(f"  Node {peer_to_crash} rejoined as peer")
 
-    print("  Waiting for session to complete (submission → voting → closed)...")
     await wait_for_phase("closed")
     state = await get_state()
-    print(f"  Coordinator is still: Node {state['coordinator_id']} (no re-election needed)")
 
     input("\n  Press Enter to shut down...")
     shutdown_all(processes)
@@ -236,33 +219,27 @@ async def crash_peer():
 async def crash_submission():
     processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
 
-    print("\n  Start the session from the UI, then submit your questions.")
     await wait_for_phase("submission")
-    print("  Submission phase started! Submit questions in the UI.")
 
-    input(f"\n  Press Enter to crash coordinator (Node {coord}) during submission...")
+    input(f"\n  press Enter to crash coordinator...")
     await crash_node(coord, processes)
 
-    print("  Waiting for re-election...")
+    print("  waiting for re-election...")
     await asyncio.sleep(8)
     state = await get_state()
     new_coord = state["coordinator_id"]
     print(f"  New coordinator: Node {new_coord}")
-    print(f"  Questions recovered: {len(state.get('questions', []))}")
 
-    print("  Session continues with remaining submission time, then voting...")
-
-    print(f"\n  Auto-recovering Node {coord} in 2 seconds...")
+    print(f"\n  auto-recovering crashed in 2 seconds...")
     await asyncio.sleep(2)
     peers = [8000 + j for j in range(1, 5) if j != coord]
     await recover_node(coord, 8000 + coord, peers, processes,
                        sub_duration=60, vote_duration=60)
 
-    print("  Node sends QUERY, receives ANSWER, reclaims coordinator...")
+    print("  node sends QUERY, receives ANSWER, reclaims coordinator...")
     await asyncio.sleep(5)
     state = await get_state()
-    print(f"  Coordinator is still: Node {state['coordinator_id']}")
-    print(f"  Node {coord} recovered and reclaimed coordinator role")
+    print(f"  coordinator is still: Node {state['coordinator_id']}")
 
     input("\n  Press Enter to shut down...")
     shutdown_all(processes)
@@ -325,7 +302,6 @@ if __name__ == "__main__":
         print("  python3 orchestration.py crash-after-voting # coordinator crash after voting ends")
         print("  python3 orchestration.py crash-peer         # peer crash during voting")
         print("  python3 orchestration.py crash-submission   # coordinator crash during submission")
-        print("  python3 orchestration.py crash-recovery     # old coordinator restarts as peer")
         print("  python3 orchestration.py fault              # 50% message drop experiment")
         print()
         asyncio.run(main())
