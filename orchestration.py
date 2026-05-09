@@ -110,7 +110,7 @@ async def main():
 #  Use case 1: Coordinator crashes during voting phase.
 async def crash_voting():
 
-    processes, coord = await setup_cluster(sub_duration=30, vote_duration=20)
+    processes, coord = await setup_cluster(sub_duration=30, vote_duration=25)
 
     await wait_for_phase("submission")
     await wait_for_phase("voting")
@@ -135,7 +135,6 @@ async def crash_voting():
     await asyncio.sleep(2)
     state = await get_state()
     print(f"  coordinator is still: Node {state['coordinator_id']}")
-    print(f"  node {coord} recovered and reclaimed coordinator role")
 
     input("\n  press Enter to shut down...")
     shutdown_all(processes)
@@ -266,7 +265,7 @@ async def fault_experiment():
     print("\n  Crashing node 4, forcing re-election with 50% message loss...")
     processes[4].terminate()
     del processes[4]
-    await asyncio.sleep(10)
+    await asyncio.sleep(15)
 
     state = await get_state()
     print(f"  Coordinator after re-election: Node {state['coordinator_id']}")
