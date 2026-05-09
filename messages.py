@@ -5,8 +5,7 @@
 """
 
 import json
-from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -18,7 +17,7 @@ class Message:
     payload: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
-        """Convert message to JSON string."""
+        # convert to json string
         return json.dumps({
             "type": self.type,
             "sender_id": self.sender_id,
@@ -27,7 +26,7 @@ class Message:
 
     @classmethod
     def from_json(cls, data: str) -> "Message":
-        """Parse message from JSON."""
+        # parse json back to a Message
         parsed = json.loads(data)
         return cls(
             type=parsed["type"],
@@ -37,25 +36,23 @@ class Message:
 
 
 # Election-related message types, include Election, Ok, Query, Answer
-@dataclass
 class ElectionMessage(Message):
     def __init__(self, sender_id: int):
         super().__init__(type="ELECTION", sender_id=sender_id, payload={})
 
 
-@dataclass
 class OkMessage(Message):
     def __init__(self, sender_id: int):
         super().__init__(type="OK", sender_id=sender_id, payload={})
 
 
-@dataclass
+
 class QueryMessage(Message):
     def __init__(self, sender_id: int):
         super().__init__(type="QUERY", sender_id=sender_id, payload={})
 
 
-@dataclass
+
 class AnswerMessage(Message):
     def __init__(self, sender_id: int, coordinator_id: int):
         super().__init__(
@@ -67,7 +64,7 @@ class AnswerMessage(Message):
         )
 
 
-@dataclass
+
 class CoordinatorMessage(Message):
    #broadcast message announcing new coordinator
    #sender might not be the coordinator
@@ -79,7 +76,7 @@ class CoordinatorMessage(Message):
         )
 
 
-@dataclass
+
 class HeartbeatMessage(Message):
     def __init__(self, sender_id: int, coordinator_id: int, phase: str,
                  submission_deadline=None, voting_deadline=None):
@@ -96,7 +93,7 @@ class HeartbeatMessage(Message):
 
 
 # Session-related message types
-@dataclass
+
 class SubmitMessage(Message):
     #used to submit question during session
     def __init__(self, sender_id: int, question: str):
@@ -107,7 +104,7 @@ class SubmitMessage(Message):
         )
 
 
-@dataclass
+
 class VoteMessage(Message):
     #used to vote for question(s)
     def __init__(self, sender_id: int, question_ids: list):
@@ -118,7 +115,7 @@ class VoteMessage(Message):
         )
 
 
-@dataclass
+
 class QuestionsMessage(Message):
     #used to broadcast questions
     def __init__(self, sender_id: int, questions: list):
@@ -129,7 +126,7 @@ class QuestionsMessage(Message):
         )
 
 
-@dataclass
+
 class ResultMessage(Message):
     #used to broadcast results/rankings
     def __init__(self, sender_id: int, rankings: list):
@@ -142,7 +139,7 @@ class ResultMessage(Message):
 
 
 
-@dataclass
+
 class SessionUpdate(Message):
    
     def __init__(self, sender_id: int, phase: str):
@@ -156,7 +153,7 @@ class SessionUpdate(Message):
 
 
 
-@dataclass
+
 class SessionResume(Message):
 
     def __init__(self, sender_id: int, phase: str, questions: list = None, votes: dict = None):
@@ -171,7 +168,6 @@ class SessionResume(Message):
         )
 
 #trace event for debugging
-@dataclass
 class TraceMessage(Message):
     def __init__(self, sender_id: int, event: str, detail: dict = None):
         super().__init__(
@@ -180,7 +176,6 @@ class TraceMessage(Message):
             payload={"event": event, "detail": detail or {}}
         )
 
-@dataclass
 class StepDownAck(Message):
     def __init__(self, sender_id: int):
         super().__init__(type = "STEP_DOWN_ACK", sender_id = sender_id, payload = {})
