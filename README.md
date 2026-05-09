@@ -3,11 +3,11 @@
 ## Quick Start
 
 ```bash
-# 1. Setup (creates venv + installs dependencies)
+# 1. Setup enviornment
 chmod +x setup.sh
 ./setup.sh
 
-# 2. Activate virtual environment
+# 2. Activate environment
 source .venv/bin/activate
 
 # 3. Start the system
@@ -26,22 +26,19 @@ Open browser tabs at `http://localhost:9001` ~ `http://localhost:9004` to access
 ## Demo Scenarios
 
 ```bash
-# Start cluster only (no crash simulation)
+# Start system to see first election
 python3 orchestration.py
 
-# Scenario 1: Coordinator crashes during voting phase
+# Scenario 1: crash coodinator during voting phase
 python3 orchestration.py crash-voting
 
-# Scenario 2: Peer votes then immediately crashes (verify vote delivery)
+# Scenario 2: crash one peer after it voted
 python3 orchestration.py crash-after-voting
 
-# Scenario 3: Peer crashes during submission phase (system continues)
+# Scenario 3: crash one peer during submission phase
 python3 orchestration.py crash-peer
 
-# Scenario 4: Coordinator crashes during submission phase
+# Scenario 4: crash coodinator during submission phase
 python3 orchestration.py crash-submission
-
-# Fault experiment: 50% message drop rate
-python3 orchestration.py fault
 ```
 
